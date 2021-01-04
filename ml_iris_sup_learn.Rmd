@@ -1,0 +1,675 @@
+---
+title: "Machine Learning on the Iris dataset - Supervised Learning"
+author: '[Chukwuemeka Okoli](https://www.linkedin.com/in/chukwuemeka-okoli-38686923/)'
+date: Sys.Date
+output:
+  pdf_document: 
+    toc: yes
+    highlight: zenburn
+  html_notebook:
+    toc: yes
+  html_document:
+    highlight: textmate
+    theme: spacelab  
+---
+# Introduction
+In this [R Markdown](https://rmarkdown.rstudio.com) project, we classified the iris dataset using Machine Learning. The Machine Learning technique applied is Supervised learning in which we apply the classification algorithm on the Iris dataset.
+
+# Data and the aim of research
+
+The dataset for this project is the Iris dataset. The data set is a csv file with **150 records** under **5 attributes** - Petal Length, Petal Width, Sepal Length, Sepal width and Class(Species) of the Iris flower. 
+
+The **aim of the research** is to apply the classification algorithm in classifying the Iris flower. The goal is to use the dataset to understand how Machine Learning is carried out in real time. 
+
+The **scope of this presentation** will focus on exploring data analysis using the Iris flower dataset.
+
+
+# Tools
+
+The main tool used is **Python**. The code is maintained in an **Rmd file**. The main models used are *Linear regression, and Nonlinear regression*. 
+
+
+# Preliminaries
+First, the required packages are installed using the `install.packages()` function. 
+
+```{r package_install, eval = FALSE}
+
+# this installs the required packages
+install.packages(c("knitr", "rmarkdown", "tidyverse", "data.table", "matrixStats", "fields", "plyr", "ggplot2", "nls2", "purrr", "nlstools", "plotly", "ggthemes", "minpack.lm", "forecast", "tseries",  "dplyr", "extrafont"))
+
+```
+
+The installed package is then loaded 
+
+```{r load_packages, eval = FALSE}
+
+# load libraries
+
+# Create vector of packages
+project_packages <- c("knitr", "rmarkdown", "tidyverse", "data.table", "matrixStats", "fields", "plyr", "ggplot2", "nls2", "purrr", "nlstools", "nlme", "plotly", "ggthemes", "minpack.lm", "forecast", "tseries", "dplyr", "extrafont")    
+
+lapply(project_packages, require, character.only = TRUE)    # load multiple packages
+
+```
+
+# Research Design
+
+## Exploratory Data Analysis
+
+We apply Exploratory Data Analysis (EDA) to analyze the data sets in order to summarize their main characteristics, often with visual methods.
+
+Let's start from reading original (csv) data set
+
+```{r raw_data}
+set.seed(500)
+prod_data <- read.csv("midlandbasinoil.csv")
+head(prod_data)
+```
+
+The data set has **`r nrow(prod_data)` rows** (observations) and **`r ncol(prod_data)` features**.
+
+### Summaries
+The data object `prod_data` is complex. It contains various information about 
+production profile of each well. We use `summary()` to get a quick summary of the data. 
+
+```{r summary, eval = FALSE}
+summary(prod_data)
+```
+
+
+## Predictive Modeling
+
+The decline curve model used in this report is the Arps model defined as:
+$$q(t) = \frac{q_i}{(1+D_ibt)^{1/b}}$$ 
+where:
+$q$ is the current production rate, $q_i$ is the production rate at time zero, $b$ is the hyperbolic decline constant, $t$ is the time since the start of production, $D_i$ is the initial nominal decline rate. For hyperbolic decline, the $b$ value is between 0 and 1. When $b$ equals 0, the decline is exponential, and when $b$ equals 1, the decline is harmonic.
+
+We applied this model with the modified bootstrap methodology using the overall workflow below.
+
+- Set aside a fraction of the dataset as the hindcast and the rest of the dataset to estimate the misfit between predicted (forecast) and actual production.
+- Fit the initial ``hindcasted" dataset with a decline curve model and compute residuals between the fitted model and observed data.
+- Determine the optimal block size using the autocorrelation function and sub-divide the residuals into time intervals based on the optimal block size.
+- Generate multiple bootstrap realizations (or synthetic datasets) of the block of residuals by randomly sampling with replacement. Each bootstrap realization has the same size as the original hindcast.
+- Add the synthetic datasets consisting of consecutive time blocks of residuals to the fitted production data to obtain a new synthetic (bootstrap) datasets.
+- Estimate the parameters in the decline curve model by fitting the selected decline curve analysis model to the generated synthetic data using regression analysis.
+- Using the estimated parameters and a decline curve analysis model, forecast production performance.
+- Repeat steps 4 to 7, iterating until the last bootstrap realization.
+- Quantify the variability of the reserves by computing the 10th, 50th, and 90th percentiles.
+
+ 
+ ![Fig1: Sequence for Modified Bootstrap using Arps' model](modified_bootstrap_arps.jpg)
+ 
+### User-defined functions
+To translate this workflow into code, We first start by creating `functions()` for user to define Production history, number of production months required for hindcasting, and number of bootstrap realization to run.
+
+```{r defineMonth, echo=TRUE}
+# This function is used to define the number of production (in months) required for analysis. 
+# It uses the readline function which allows user to enter one-line string at the terminal. 
+# The function is written to prevent failure if no number is entered.
+
+# User-defined total months required for analysis. We map the size of total monthly production data we want to use.
+defineMonth <- function()
+{ 
+  my.month <- readline(prompt = "Specify total number of months required: ")
+  if(!grepl("^[0-9]+$", my.month))
+  {
+    return(defineMonth())
+  } 
+  return(as.integer(my.month))
+}
+my.month <- print(defineMonth())
+```
+
+```{r defineHistory}
+# This function is used to define the number of production history (in months) that is known.i.e. the "hindcast". 
+# Here we can assume we only have say for example about 45 months of data points. In hindcasting, 
+# forecasts are made using less than all the known data and compared to the actual data for validation.
+
+# User-defined production history that is known (used as hindcast)
+defineHistory <- function()
+{ 
+  my.history <- readline(prompt = "Number of production history (in months) that is known: ")
+  if(!grepl("^[0-9]+$", my.history))
+  {
+    return(defineHistory())
+  } 
+  return(as.integer(my.history))
+}
+my.history <- print(defineHistory())
+```
+
+```{r defineNoBootstraps}
+# This can be any number from 50 up to 1000. In this project, 100 bootstrap was used.
+
+# User-defined number of bootstrap realization to run. 
+defineNoBootstraps <- function()
+{ 
+  my.bootstrap <- readline(prompt = "Define number of bootstrap required: ")
+  if(!grepl("^[0-9]+$", my.bootstrap))
+  {
+    return(defineNoBootstraps())
+  } 
+  return(as.integer(my.bootstrap))
+}
+my.bootstrap <- print(defineNoBootstraps())
+no_bootstraps <- as.numeric(my.bootstrap)  
+```
+
+```{r confidenceInterval}
+# User-defined Confidence Interval
+# Confidence Interval defined as a percentage value e.g. 99, 95, 98.2 etc
+Confidence.Interval <- function()
+{ 
+  conf_int <- readline(prompt = "Define Confidence Interval (in %): ")
+  if(!grepl("^[0-9]+$", conf_int))
+  {
+    return(Confidence.Interval())
+  } 
+  return(as.numeric(conf_int))                                            
+}
+conf_int <- print(Confidence.Interval())
+
+ci <- as.numeric(format(round((conf_int/100), 2), nsmall = 2))
+
+alpha <- ci
+
+```
+
+We can print user defined inputs
+```{r user_defined}
+print(paste('Total production: ', my.month, 'months of production data'))
+print(paste('Hindcast used:', my.history, 'months for hindcast'))
+print(paste('Number of bootstrap:', no_bootstraps, 'bootstrap to be run'))
+print(paste('Defined Confidence Interval:', conf_int,'%'))
+```
+### Models Development
+```{r list_item}
+
+t <- as.numeric(my.month)    # This is the number of of time steps selected.i.e production in months
+m <- as.numeric(my.history)   # This is the Production history that is known i.e. the hindcast
+
+# The value for the production rate changes depending on the well you trying to analyze. Value start from 2 to 13
+# denoting wells in the dataset.
+
+Cumulative_P10 <- Cumulative_P50 <- Cumulative_P90 <- Cumulative_Actual <- c()
+```
+
+For simplicity, We use a sample well to illustrate this methodology. A part of the data is used for history-matching. The for-loop has been uncommented to illustrate the output and give a sence of what is happening in the loop.
+
+    ```{r}
+
+#for (i in seq(2, dim(prod_data)[2], by = 1)){
+  
+  #tryCatch({
+    
+    # User selected monthly production rate.
+    prod_rate <- prod_data[ ,3][1:t] # Monthly Production value step
+    prod_time <- prod_data[ ,1][1:t] # Production time steps 
+    prod_data_df <- data.frame(prod_time, prod_rate) # Placing the Production rate and time values in a dataframe
+    e <- t - m
+    
+    # Production dataset used as hindcast 
+    prod_hindcast <- prod_data_df[1:m,]
+    time_hindcast <- prod_hindcast[ ,1]
+    rate_hindcast <- prod_hindcast[ ,2]
+    
+    # Production data not used
+    prod_actual <- prod_data_df[m+1:e,]
+    prod_actual_omit <- na.omit(prod_actual)      # Apply na.omit to remove rows without values 
+    time_actual <- prod_actual_omit[ ,1]
+    rate_actual <- prod_actual_omit[ ,2]
+    
+    # The hindcast (or production data known) is used to create a time series object
+    # create a Time Series for hindcast dataset
+    prod.data.ts <- ts(rate_hindcast, frequency = 12, start=c(2003,1))      # Time Series of Production Performance
+    prod.data.ts.values <- as.numeric(prod.data.ts)                                           # representing y[i]
+    prod.data.ts.times <- as.numeric(time(prod.data.ts))   
+    
+    ```
+
+Then nonlinear regression is done on the hindcast dataset to generate residual (errors). One way to obtain starting parameters for the nonlinear regression is to linearize the Arps equation through second-order Taylor series expansion.
+$$q(t) = {q_i}{(1+D_ibt)^{-1/b}} $$
+$$log~q  =  log~q_i - \frac{1}{b}log(1+bD_it)$$
+With second-order Taylor series expansion: $log (1+x) \approx x - \frac{x^2}{2}$
+
+$$log~q   \approx log~q_i  - \frac{1}{b}\left(bD_it - \frac{\left(bD_it\right)^2}{2}\right) $$
+$$log~q \approx log~q_i - D_it + \frac{bD_i^2t^2}{2}$$
+This can be expressed as a second-order linear regression model 
+$$log~q = \hat{\beta_0} + \hat{\beta_1}t + \hat{\beta_2}t^2$$
+where $\hat{\beta_0} = log~q_i$, ~~~ $\hat{\beta_1}= -D_i$, ~~~ $\hat{\beta_2}= \frac{bD_i^2}{2}$
+
+    ```{r lm_fit}
+    # linearizing the DCA in order to estimate good start parameters for actual field production data
+    lmodel <- lm(log(rate_hindcast) ~ time_hindcast + I(time_hindcast^2)) 
+    summary(lmodel)
+    
+    beta0 <- lmodel$coefficient[1] 
+    beta1 <- lmodel$coefficient[2] 
+    beta2 <- lmodel$coefficient[3]
+    
+    q0 <- exp(beta0)
+    D0 <- -beta1
+    if (D0 > 0){
+      D0 <- -beta1
+    } else {
+      D0 <- beta1
+    }
+    
+    b0 <- beta2*2/beta1^2 
+    if (b0 > 0){
+      b0 <- beta2*2/beta1^2 
+    } else {
+      b0 <- -(beta2*2/beta1^2)
+    }
+    
+    ```
+    
+    ```{r nls_fit} 
+    # create starting parameter list
+    Start0 <- list(q = q0, b = b0, D = D0)
+    
+    # NLS fit for selected DCA to initial dataset of production rate
+    Yi_hat <- nlsLM(rate_hindcast ~ q*(1 + b * D * time_hindcast)^(-1/b), algorithm = "port",
+                    start = Start0, trace = T) 
+    
+    # Summary statistics for Yi_hat
+    summary(Yi_hat)
+    ```
+
+We then calculate the residual between the fitted model and observed data.
+    ```{r resid_p}
+    # Getting some estimate of goodness of fit for actual field production data
+    cor(rate_hindcast, predict(Yi_hat))
+
+    # Residuals between fitted model and observed data
+    prod.data.fitted.values <- fitted(Yi_hat)
+    prod.residuals <- prod.data.ts.values - prod.data.fitted.values
+    prod.data.residuals <- matrix(prod.residuals)
+    ```
+The residual plot is given below
+    ```{r}
+    plot(fitted(Yi_hat), residuals(Yi_hat), xlab = "Fitted values", ylab = "Residuals", col="blue")
+    abline(a = 0, b = 0, col="red", lty=2, lwd=2)
+    ```
+
+We determine the confidence interval, plot the autocorrelation function (acf) and use the acf to determine the optimal block size by calculating the autocorrelation function.
+    ```{r}
+    # Define the Confidence Interval, divide constructed residuals into blocks, and find the optimal block size 
+    n <- length(prod.data.ts)
+    
+    # Confidence limits
+    conf.lims <- c(-1,1)*qnorm((1 + ci)/2)/sqrt(n)
+    
+    # Autocorrelation plot of Residuals
+    # Passing confidence level to ACF plot
+    prod.acf <- acf(prod.data.residuals,
+                    main = paste("Autocorrelation function for Residual with", conf_int, "% Confidence interval"), 
+                    ylab = 'ACF of Residuals', xlab = 'lag k',
+                    ci = alpha)
+    
+    prod.acf$acf
+    ```
+
+The maximum value of the acf or lag time within which auto correlation is significantly nonzero give the optimal block size calculated below.
+    ```{r block_size}
+    abs_acf <- abs(prod.acf$acf)
+    
+    max_acf = 1
+    j = 1
+    
+    for(j in seq(1, dim(prod.acf$acf)[1], by = 1)){
+      if (abs_acf[j] > conf.lims[2]) 
+      {
+        max_acf <- j - 1
+      } 
+    }
+    block.size <- max_acf
+    
+    # Optimum block size, L (in months)
+    if (block.size > 0) {
+      L <- block.size 
+    } else {
+      L <- 1
+    } 
+    
+    print(paste("Optimal block size is:", L))
+    ```
+
+We develop a plot of residual with time blocks. The goal is to use this time blocks to generate synthetic dataset
+    ```{r}
+    # Plot of Residuals with time blocks
+    plot(prod.data.residuals ~ time_hindcast, 
+         main = "Plot of Residuals with time blocks",
+         ylab = 'Residuals, STB', 
+         xlab = 'Time, months', 
+         col ='blue')
+    abline(v = seq(0, m, length.out = round(m / L) + 1), col = "lightblue", lty = 2, lwd = 2)
+    ```
+
+We generated a vector of bootstrap realization of the residuals of `r L` observations
+    ```{r b_bootstrap}
+    # Blocks bootstrapping realization of the residuals of L observations
+    set.seed(2019);
+    bootstraps.residuals <- lapply(1:no_bootstraps, function(x) {
+      mbb <- sample(1:(length(prod.data.residuals) - L), length(prod.data.residuals) / L + 1, replace = TRUE);
+      mbb <- c(t(sapply(0:(L - 1), function(i) mbb + i)))[1:my.history];
+      prod.data.residuals[mbb];
+    })
+    ```
+    
+We then generated synthetic dataset of blocks of residual and add to the originally regressed decline curve model to obtain new synthetic data set of production
+    ```{r syn_data}
+    # Unlisting the Bootstrap dataset 
+    syn.bootstraps.residuals <- data.frame(matrix(unlist(bootstraps.residuals), 
+                                                  nrow = length(prod.data.residuals), byrow = F))
+    syn.bootstraps.residuals
+    
+    set.seed(200)
+    # Using a for - loop to generate multiple realization of new synthetic production data set
+    synthetic.production.data <- matrix(NA, nrow = length(prod.data.residuals), 
+                                                ncol = length(syn.bootstraps.residuals))
+    
+    g = 1
+    for(g in seq(1, dim(syn.bootstraps.residuals)[2], by = 1)){
+      synthetic.production.data[ ,g] <- syn.bootstraps.residuals[ ,g]  + prod.data.fitted.values
+    }  
+  
+    # New Synthetic data set of production  
+    synthetic.production.rate.values <- abs(synthetic.production.data)
+    ```
+
+Using the new synthetic dataset obtain, we generated deterministic estimates of parameters $q$, $b$ and $D$ from the bootstrap synthetic production dataset.
+        
+    ```{r syn_fit}
+    k = 1
+    
+    coef_q <- coef_b <- coef_D <- c()
+    mean_q1 <- mean_b1 <- mean_D1 <- c()
+    
+    for(k in seq(1, dim(synthetic.production.rate.values)[2], by = 1))
+    {
+      bootstrap_time <- matrix(seq(synthetic.production.rate.values[ ,k]))
+      bootstrap_rate <- synthetic.production.rate.values[ ,k]
+       
+      # linearize to obtain good start parameters   
+      bootstraplmfit <- lm(log(bootstrap_rate) ~ bootstrap_time + I(bootstrap_time^2))  
+      summary(bootstraplmfit)
+      
+      beta0 <- bootstraplmfit$coefficient[1] 
+      beta1 <- bootstraplmfit$coefficient[2] 
+      beta2 <- bootstraplmfit$coefficient[3]
+      
+      q1 <- exp(beta0)
+      D1 <- -beta1
+      if (D1 > 0){
+        D1 <- -beta1
+      } else {
+        D1 <- beta1
+      }
+      
+      b1 <- beta2*2/beta1^2 
+      if (b1 > 0){
+        b1 <- beta2*2/beta1^2 
+      } else {
+        b1 <- -(beta2*2/beta1^2)
+      }
+      
+      Start1 <- list(q = q1, b = b1, D = D1)
+      
+      # NLS fit for the bootstrap dataset 
+      Yi_hat1 <- nlsLM(bootstrap_rate ~ q * (1 + b * D * bootstrap_time)^(-1/b),
+                       algorithm = "port", start = Start1, trace = T)
+      
+      newcoef_q <- coef(summary(Yi_hat1)[order(bootstrap_time)])["q.(Intercept)","Estimate"]
+      coef_q <- rbind(coef_q, newcoef_q)
+      
+      newcoef_b <- abs(coef(summary(Yi_hat1)[order(bootstrap_time)])["b.I(bootstrap_time^2)","Estimate"])
+      coef_b <- rbind(coef_b, newcoef_b)
+      
+      newcoef_D <- abs(coef(summary(Yi_hat1)[order(bootstrap_time)])["D.bootstrap_time","Estimate"])           
+      coef_D <- rbind(coef_D, newcoef_D)
+      
+      # Computed decline curve parameters
+      matq1 <- as.matrix(coef_q)
+      matb1 <- as.matrix(coef_b)
+      matD1 <- as.matrix(coef_D)
+      colnames(matq1) <- "q"; colnames(matb1) <- "b"; colnames(matD1) <- "D"
+    }
+    ```
+    
+    ```{r}
+      plot(fitted(Yi_hat1), residuals(Yi_hat1), xlab = "Fitted values", ylab = "Residuals")
+      abline(a = 0, b = 0)
+      
+      summary(Yi_hat1)
+    
+    ```
+
+We can view statistical analysis of the bootstrap parameters.
+    ```{r}
+    #-----------------------------------------------------------------------------------------------------------
+    # Statistical Analysis of Bootstrap parameters
+    #-----------------------------------------------------------------------------------------------------------
+    bootstrap_parameters <- cbind(matq1, matb1, matD1)
+    mbm_arps_vars <- data.frame(bootstrap_parameters)
+    
+    summary(mbm_arps_vars)
+    
+    # Bootstrap q parameter
+    bootstraps_q <- mbm_arps_vars$q
+    x <- bootstraps_q
+    mean_x <- mean(x)
+    std <- sqrt(var(x))
+    
+    # Histogram of bootstrap q values
+    hist(x,  
+         main = "Histogram of bootstrap values of q with normal curve",
+         col = 'dodgerblue3',
+         border = "black",
+         freq = FALSE,
+         density = 20,  
+         angle = 60,
+         xlab = "Bootstrap q value")
+    curve(dnorm(x, mean = mean_x, sd = std), col = 'chocolate3', lwd = 2, add = TRUE)
+    abline(v = mean(x),
+           col = "royalblue",
+           lwd = 2)
+    
+    # Bootstrap b parameter
+    bootstraps_b <- mbm_arps_vars$b
+    x <- bootstraps_b
+    mean_x <- mean(x)
+    std <- sqrt(var(x))
+    
+    # Histogram of bootstrap b values
+    hist(x,  
+         main = "Histogram of bootstrap b values with normal curve",
+         col = 'orange',
+         border = "black",
+         freq = FALSE,
+         density = 20,  
+         angle = 60,
+         xlab = "Bootstrap b value")
+    curve(dnorm(x, mean = mean_x, sd = std), col = 'blue', lwd = 2, add = TRUE)
+    abline(v = mean(x),
+           col = "red",
+           lwd = 2)
+    
+    # Bootstrap D parameter
+    bootstraps_D <- mbm_arps_vars$D
+    x <- bootstraps_D
+    mean_x <- mean(x)
+    std <- sqrt(var(x))
+    
+    # Histogram of bootstrap D values
+    hist(x,  
+         main = "Histogram of bootstrap D values with normal curve",
+         col = 'chocolate3',
+         border = "black",
+         freq = FALSE,
+         density = 20,  
+         angle = 60,
+         xlab = "Bootstrap D value")
+    curve(dnorm(x, mean = mean_x, sd = std), col = 'royalblue', lwd = 2, add = TRUE)
+    abline(v = mean(x),
+           col = "midnightblue",
+           lwd = 2)
+    ```
+    
+With the computed decline curve model parameters determined above, we then generate forecast of production rate by applying the Arps equation    
+    ```{r}
+    # Forecasted production rate 
+    mat_forecast_rate <- matrix(NA, no_bootstraps, length(time_hindcast))
+    for (l in 1:length(time_hindcast)){
+      forecast_rate <- matq1*(1 + matb1 * matD1 * time_hindcast[l])^(-1/matb1)
+      mat_forecast_rate[,l] <- forecast_rate
+    }
+    
+    mat_forecast_rate2 <- matrix(NA, no_bootstraps, length(time_actual))
+    for (l in 1:length(time_actual)){
+      forecast_rate2 <- matq1*(1 + matb1 * matD1 * time_actual[l])^(-1/matb1)
+      mat_forecast_rate2[,l] <- forecast_rate2
+    }
+    ```
+   
+Uncertainty in production forecast depicted as P10, P50 and P90 are then determine thus:
+    ```{r}
+    # Uncertainty probabilistic estimates for 10th, 50th and 90th percentile
+    matQQ_90 <- apply(mat_forecast_rate2, 2, quantile, probs=c(0.1))
+    matQQ_50 <- apply(mat_forecast_rate2, 2, quantile, probs=c(0.5))
+    matQQ_10 <- apply(mat_forecast_rate2, 2, quantile, probs=c(0.9))
+    matQQ_9 <- apply(mat_forecast_rate, 2, quantile, probs=c(0.1))
+    matQQ_5 <- apply(mat_forecast_rate, 2, quantile, probs=c(0.5))
+    matQQ_1 <- apply(mat_forecast_rate, 2, quantile, probs=c(0.9))
+    
+    fielddatafit <- lm(log(prod_rate) ~ prod_time + I(prod_time^2))
+    summary(fielddatafit)
+    
+    beta0 <- fielddatafit$coefficient[1] 
+    beta1 <- fielddatafit$coefficient[2] 
+    beta2 <- fielddatafit$coefficient[3]
+    
+    q2 <- exp(beta0)
+    D2 <- -beta1
+    b2 <- beta2*2/beta1^2 
+    Start2 <- list(q = q2, b = b2, D = D2)  
+    
+    Yi_hat2 <- nlsLM(prod_rate ~ q * (1 + b * D * prod_time)^(-1/b), algorithm = "port",
+                     start = Start2, trace = T)
+    
+    summary(Yi_hat2)
+    ```
+    
+    
+A plot of production rate versus time for the actual field data tells us how well our .....
+    ```{r}
+    
+    # Plot Production Rate versus Time plot
+    plot(prod_rate ~ prod_time, ylab = 'Production Rate', 
+         xlab = 'Time, months', 
+         col = 'blue', 
+         main = "Rate vs Time")
+    lines(prod_time, fitted(Yi_hat2), col = 'red', lwd = 2)
+    ```
+
+We also visualize a plot of production rate versus time, and the fitted value of our forecast on the same plot to see its performance   
+    ```{r forecast_plot}
+    P10_df <- data.frame(x = prod_time[(m+1):t], p = matQQ_10)      
+    P50_df <- data.frame(x = prod_time[(m+1):t], q = matQQ_50)
+    P90_df <- data.frame(x = prod_time[(m+1):t], r = matQQ_90)
+    
+    windowsFonts(Times = windowsFont("CMU Serif"))
+    forecastplot <- ggplot(prod_data_df , aes(prod_time, prod_rate)) +
+      geom_line(color = "grey") +
+      geom_point(color = "black") +                                                                               
+      geom_line(aes(y = predict(Yi_hat2), color = "Best_fit"), lwd = 1) +
+      geom_vline(xintercept = m, lty = 5, color = "grey") +
+      geom_line(data = P10_df, aes(x = x, y = p, color = "P10"), lty = 5, lwd = 1) + 
+      geom_line(data = P50_df, aes(x = x, y = q, color = "P50"), lty = 5, lwd = 1) +
+      geom_line(data = P90_df, aes(x = x, y = r, color = "P90"), lty = 6, lwd = 1) +
+      ggtitle(paste("Production Rate vs Time for", m, "months of production history \n(hindcast dataset)")) +  
+      ylab("Production Rate, STB/Month") + xlab("Time, months") + 
+      theme_bw() +
+      theme(text = element_text(family = "Times", face = "plain", size = 12)) +
+      theme(plot.title = element_text(hjust = 0.5)) + 
+      scale_colour_manual(name = "", 
+                          values = c(Best_fit = "firebrick", P10 = "green", P50 = "blue", P90 = "orange")) +
+      theme(legend.position = c(1, 1), 
+            legend.justification = c(1, 1),
+            legend.box.background = element_rect(colour = "black", fill = "white"),
+            legend.box.margin = margin(6, 6, 6, 6))
+    
+    # Production forecast plot
+    forecastplot
+    ```
+    
+We can also visualize the cumulative production plot showing forecasted P10, P50, and P90     
+    ```{r cum_forecast}
+    dim(matQQ_1) <- c(length(matQQ_1), 1)
+    dim(matQQ_10) <- c(length(matQQ_10), 1)
+    dim(matQQ_5) <- c(length(matQQ_5), 1)
+    dim(matQQ_50) <- c(length(matQQ_50), 1)
+    dim(matQQ_9) <- c(length(matQQ_9), 1)
+    dim(matQQ_90) <- c(length(matQQ_90), 1)
+    
+    bind1 <- rbind(matQQ_1,matQQ_10)
+    bind2 <- rbind(matQQ_5,matQQ_50)
+    bind3 <- rbind(matQQ_9,matQQ_90)
+    
+    # Plot of Cumulative Production value for P10, P50 and P90
+    Cum_df <- data.frame(x = prod_time, y = cumsum(prod_rate))
+    bind1_df <- data.frame(x = prod_time, y = cumsum(bind1))
+    bind2_df <- data.frame(x = prod_time, y = cumsum(bind2))
+    bind3_df <- data.frame(x = prod_time, y = cumsum(bind3))
+    
+    windowsFonts(Times = windowsFont("CMU Serif"))
+    cumforecastplot <- ggplot(Cum_df, aes(x = prod_time, y = cumsum(prod_rate))) + 
+      geom_point(color = 'firebrick') +
+      geom_line(data = bind1_df, aes(x = x, y = cumsum(bind1), color = "P10"), lty = 5, lwd = 1) + 
+      geom_line(data = bind2_df, aes(x = x, y = cumsum(bind2), color = "P50"), lty = 5, lwd = 1) +
+      geom_line(data = bind3_df, aes(x = x, y = cumsum(bind3), color = "P90"), lty = 6, lwd = 1) +
+      ggtitle('Cumulative Production for P10, P50 and P90 vs Time') + 
+      ylab("Cumulative Production, STB") + xlab("Time, months") + 
+      theme_bw() +
+      theme(text = element_text(family = "Times", face = "plain", size = 12)) +
+      theme(plot.title = element_text(hjust = 0.5)) +
+      scale_colour_manual(name = "", 
+                          values = c(Best_fit = "firebrick", P10 = "green", P50 = "blue", P90 = "orange3")) +
+      theme(legend.position = c(1, 0.3), 
+            legend.justification = c(1, 1),
+            legend.box.background = element_rect(colour = "black", fill = "white"),
+            legend.box.margin = margin(6, 6, 6, 6))
+    
+    # Cumulative Production forecast plot
+    cumforecastplot
+    ```
+    
+    ```{r}
+   
+    
+    # Values for Cumulative Production
+    Cum_P10 <- cumsum(bind1)[length(cumsum(bind1))]      # Cumulative P10 value
+    Cum_P50 <- cumsum(bind2)[length(cumsum(bind2))]      # Cumulative P50 value
+    Cum_P90 <- cumsum(bind3)[length(cumsum(bind3))]      # Cumulative P90 value
+    Cum_Actual <- cumsum(prod_rate)[length(cumsum(prod_rate))]     # Actual cumulative from the field's production 
+    
+    Cumulative_P10 <- rbind(Cumulative_P10, Cum_P10)
+    Cumulative_P50 <- rbind(Cumulative_P50, Cum_P50)
+    Cumulative_P90 <- rbind(Cumulative_P90, Cum_P90)
+    Cumulative_Actual <- rbind(Cumulative_Actual, Cum_Actual)
+    
+    matCumulative_P10 <- data.frame(Cumulative_P10)
+    matCumulative_P50 <- data.frame(Cumulative_P50)
+    matCumulative_P90 <- data.frame(Cumulative_P90)
+    matCumulative_Actual <- data.frame(Cumulative_Actual)
+    
+#  }, error = function(e) {cat("ERROR: ", conditionMessage(e), "\n")})
+
+#}
+    ```
+    
+### Models Evaluation
+We applied the methodology above an tested it to 1000 wells in the Permian basin. We discovered that the Modified bootstrap method with Arps (MBM-Arps) model produces P50 forecasts that best match cumulative production regardless of the sub-basin and amount of production hindcast used. Also, the MBM Arps produced cumulative P50 predictions that are within 20\% of the true cumulative production value using only a 24-month hindcast. With a 12 month-hindcast, the MBM-Arps combined model produced cumulative P50 predictions that had a forecast error of approximately 20\%. As expected, with increasing hindcast duration, the coverage rate increased, and the forecast error decreased. Also, the uncertainty band width decreased with increasing production history. Consequently, the P90 - P10 intervals become narrower with increasing production history. Based on the foregoing, it is up to the individual engineer/company to decide if the low coverage rates seen with the above model combinations disqualify their use at low hindcast values despite their relatively reasonable predictions.  
+
+## Conclusions
+The breakthrough achieved was that the tool developed was able to accurately predict future production for about 85% of all the wells analyzed. Also, the program can run on any standard computer. The main advantage of the Modified bootstrap method is that probabilistic reserve estimates are obtained based on the rearrangement of actual production data. Also, the analyst does not need to have prior information about the probability distribution of parameters used in the decline curve analysis. Similarly, the rigorous nature of the Modified Bootstrap means that the coverage rate obtained from the Modified Bootstrap method will better predict the P50 values and improve uncertainty significantly, as was observed. This project was implemented using a methodology based on the frequentist inference. This methodology allows a forecast to be done without having prior knowledge of the distribution of the parameters in the decline curve analysis (i.e., no prior knowledge of $q_i$, $D_i$, and $b$ is needed to implement the methodology). A reserve forecaster was developed using the **R** programming language that incorporated the bootstrap methodology to forecast reserves and quantify uncertainty in probabilistic decline curve forecasts. These scripts can be embedded into a commercial reservoir modeling software or developed as a stand-alone probabilistic decline curve analysis software, which can serve as an aid for decision-making in reservoir management. 
